@@ -1,0 +1,321 @@
+#!/bin/bash
+set -eu
+
+#-------------------------------------------------------------------------------
+# Misc Helpers
+#-------------------------------------------------------------------------------
+
+iscmd() { type "$1" >/dev/null 2>&1; }
+
+log() { echo -ne "$(date +"%F %T") $*"; }
+log.d() { log "[DEBUG] $*"; }
+log.i() { log "[INFO] $*"; }
+log.w() { log "[WARN] $*"; }
+log.e() { log "[ERROR] $*"; }
+logln() { log "$*\n"; }
+logln.d() { log.d "$*\n"; }
+logln.i() { log.i "$*\n"; }
+logln.w() { log.w "$*\n"; }
+logln.e() { log.e "$*\n"; }
+
+abort() { >&2 logln.e "$*"; exit 1; }
+
+run() { log.i "RUN: $*"; "$@"; }
+run2() { >&2 log.i "RUN: $*"; "$@"; }
+run_eval() { log.i "RUN: $1"; eval "$1"; }
+run2_eval() { >&2 log.i "RUN: $1"; eval "$1"; }
+
+#-------------------------------------------------------------------------------
+# Subcommand Helpers
+#-------------------------------------------------------------------------------
+
+subcmd_prefix="_subcmd"
+
+subcmd.define() {
+  local subcmd="$1"; shift
+  local impl="${1:-subcmd}"; shift
+  eval "${subcmd_prefix}.${subcmd}() { $impl \"\$@\"; }"
+}
+
+subcmd.run() {
+  local subcmd="$1"; shift
+  local cmd="${subcmd_prefix}.${subcmd}"
+  if ! iscmd "$cmd"; then
+    abort "unknown command: ${subcmd}"
+  fi
+  "$cmd" "$@"
+}
+
+subcmd.list() {
+  compgen -A 'function' "${subcmd_prefix}." | cut -c $((${#subcmd_prefix} + 2))-
+}
+
+#-------------------------------------------------------------------------------
+# App Helpers
+#-------------------------------------------------------------------------------
+
+helper.list_albums() {
+  local music_path="$1"; shift
+  local is_android="$1"; shift
+  if $is_android; then
+    adb shell "cd '${music_path}' && find . -mindepth 2 -maxdepth 2"
+  else
+    (cd "$music_path" && find . -mindepth 2 -maxdepth 2 | perl -ple 's/(.+)\.tar$/$1/')
+  fi
+}
+
+helper.diff_music() {
+  local src_music_path="$1"; shift
+  local is_src_android="$1"; shift
+  local dst_music_path="$1"; shift
+  local is_dst_android="$1"; shift
+  diff \
+    <(helper.list_albums "$src_music_path" $is_src_android | sort) \
+    <(helper.list_albums "$dst_music_path" $is_dst_android | sort) \
+    | perl -ne 'if (/^</) { s/^< +(.+)$/$1/; print }'
+}
+
+helper.is_archived() {
+  local abs_album_path="$1"; shift
+  local android="${1:-false}"
+  if $android; then
+    adb shell "[[ ! -d '$abs_album_path' ]]"
+  else
+    [[ ! -d "$abs_album_path" ]]
+  fi
+}
+
+helper.get_archive_ext() {
+  local abs_album_path="$1"; shift
+  local android="$1"; shift
+  if $android; then
+    adb shell "
+      for ext in tar; do
+        t=\"${abs_album_path}.\${ext}\"
+        if [[ -f \"\$t\" ]]; then echo \$ext; fi
+      done
+    "
+  else
+    local ext
+    # shellcheck disable=SC2043
+    for ext in tar; do
+      local t="${abs_album_path}.${ext}"
+      if [[ -f "$t" ]]; then echo "$ext"; fi
+    done
+  fi
+}
+
+helper.copy() {
+  local src="$1"; shift
+  local is_src_android="$1"; shift
+  local dst="$1"; shift
+  local is_dst_android="$1"; shift
+
+  local tmp_src="$src"
+  if $is_src_android; then
+    tmp_src="adb pull ..."
+    abort TODO
+  fi
+
+  if $is_dst_android; then
+    if [[ "${dst:$((${#dst}-1))}" = '/' ]]; then
+      run adb shell "mkdir -p \"${dst}\""
+    fi
+    run adb push "$tmp_src" "$dst"
+  else
+    run mkdir "$(basedir "$dst")"
+    run cp -R "${tmp_src}/" "${dst}/"
+  fi
+}
+
+helper.extract_and_rm() {
+  local archive_path="$1"; shift
+  local is_android="$1"; shift
+
+  if $is_android; then
+    run adb shell "(cd \"$(dirname "$archive_path")\"; tar xvf \"$(basename "$archive_path")\"); rm \"$archive_path\""
+  else
+    run_eval "(cd \"$(dirname "$archive_path")\" && tar xvf \"$(basename "$archive_path")\")"
+    run rm "$archive_path"
+  fi
+}
+
+#-------------------------------------------------------------------------------
+# Main App
+#-------------------------------------------------------------------------------
+
+app.help() {
+  cat <<EOT
+Usage: $0 <command> [options]
+
+Commands:
+EOT
+  for subcmd in $(subcmd.list); do
+    echo "    ${subcmd}"
+  done
+}
+subcmd.define help app.help
+
+app.list.help() {
+  cat <<EOT
+Usage: $0 list [--android] <path>
+EOT
+}
+
+app.list() {
+  local opt_nargs=0
+  local opt_path=""
+  local opt_android=false
+  while (($# > 0)); do
+    case "$1" in
+      --help ) app.list.help; exit 1;;
+      --android ) opt_android=true;;
+      -*) abort "unknown option: $1";;
+      * )
+        case $((++opt_nargs)) in
+          1 ) opt_path="$1";;
+          * ) abort 'too many arguments';;
+        esac
+        ;;
+    esac
+    shift
+  done
+  if (($opt_nargs != 1)); then
+    abort "too few arguments"
+  fi
+
+  helper.list_albums "$opt_path" $opt_android
+}
+subcmd.define list app.list
+
+app.diff.help() {
+  cat <<EOT
+Usage: $0 diff [--src-android] [--dst-android] <src> <dst>
+EOT
+}
+
+app.diff() {
+  local opt_nargs=0
+  local opt_src=""
+  local opt_src_android=false
+  local opt_dst=""
+  local opt_dst_android=false
+  while (($# > 0)); do
+    case "$1" in
+      --help ) app.list.help; exit 1;;
+      --src-android ) opt_src_android=true;;
+      --dst-android ) opt_dst_android=true;;
+      -*) abort "unknown option: $1";;
+      * )
+        case $((++opt_nargs)) in
+          1 ) opt_src="$1";;
+          2 ) opt_dst="$1";;
+          * ) abort 'too many arguments';;
+        esac
+        ;;
+    esac
+    shift
+  done
+  if (($opt_nargs != 2)); then
+    abort "too few arguments"
+  fi
+
+  helper.diff_music "$opt_src" $opt_src_android "$opt_dst" $opt_dst_android
+}
+subcmd.define diff app.diff
+
+app.sync.help() {
+  cat <<EOT
+Usage: $0 sync [-x | --execute] [--include <re>] [--src-android] [--dst-android] <src> <dst>
+EOT
+}
+
+app.sync() {
+  local opt_nargs=0
+  local opt_src=""
+  local opt_src_android=false
+  local opt_dst=""
+  local opt_dst_android=false
+  local opt_include=".+"
+  local opt_dryrun=true
+  while (($# > 0)); do
+    case "$1" in
+      --help ) app.list.help; exit 1;;
+      --src-android ) opt_src_android=true;;
+      --dst-android ) opt_dst_android=true;;
+      --include ) opt_include="$2"; shift;;
+      -x | --execute ) opt_dryrun=false;;
+      -*) abort "unknown option: $1";;
+      * )
+        case $((++opt_nargs)) in
+          1 ) opt_src="$1";;
+          2 ) opt_dst="$1";;
+          * ) abort 'too many arguments';;
+        esac
+        ;;
+    esac
+    shift
+  done
+  if (($opt_nargs != 2)); then
+    abort "too few arguments"
+  fi
+
+  IFS=$'\n'
+  local album_path
+  for album_path in $(
+    helper.diff_music "$opt_src" $opt_src_android "$opt_dst" $opt_dst_android \
+      | perl -ne "print if m#$opt_include#"
+  ); do
+    logln.i "Album: ${album_path}"
+    local abs_src_album_path="${opt_src}/${album_path:2}"
+    local abs_dst_album_path="${opt_dst}/${album_path:2}"
+    if helper.is_archived "$abs_src_album_path"; then
+      local abs_src_album_archive_ext
+      abs_src_album_archive_ext="$(helper.get_archive_ext "${abs_src_album_path}" "$opt_src_android")"
+      local abs_src_album_archive_path="${abs_src_album_path}.${abs_src_album_archive_ext}"
+      local abs_dst_artist_path
+      abs_dst_artist_path="$(dirname "$abs_dst_album_path")"
+      logln.i "Copying ${abs_src_album_archive_path} to ${abs_dst_artist_path}/..."
+      if ! $opt_dryrun; then
+        helper.copy "$abs_src_album_archive_path" "$opt_src_android" "${abs_dst_artist_path}/" "$opt_dst_android"
+      fi
+      log.i '=> done'
+      if $opt_dryrun; then echo -n ' (dryrun)'; fi
+      echo
+
+      local abs_dst_album_archive_path="${abs_dst_album_path}.${abs_src_album_archive_ext}"
+      logln.i "Extracting ${abs_dst_album_archive_path} and will remove it..."
+      if ! $opt_dryrun; then
+        helper.extract_and_rm "${abs_dst_album_archive_path}" "$opt_dst_android"
+      fi
+      log.i '=> done'
+      if $opt_dryrun; then echo -n ' (dryrun)'; fi
+      echo
+    else
+      logln.i "Copying ${abs_src_album_path} to ${abs_dst_album_path}..."
+      if ! $opt_dryrun; then
+        helper.copy "$abs_src_album_path" "$opt_src_android" "$abs_dst_album_path" "$opt_dst_android"
+      fi
+      log.i '=> done'
+      if $opt_dryrun; then echo -n ' (dryrun)'; fi
+    fi
+  done
+}
+subcmd.define sync app.sync
+
+app.archive() {
+  
+}
+subcmd.define archive app.archive
+
+#-------------------------------------------------------------------------------
+
+main() {
+  if [[ "${1:-}" = -* ]]; then
+    subcmd.run help
+    exit 1
+  fi
+  subcmd.run "$@"
+}
+
+main "$@"
