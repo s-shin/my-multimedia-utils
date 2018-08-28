@@ -202,7 +202,7 @@ app.diff() {
   local opt_dst_android=false
   while (($# > 0)); do
     case "$1" in
-      --help ) app.list.help; exit 1;;
+      --help ) app.diff.help; exit 1;;
       --src-android ) opt_src_android=true;;
       --dst-android ) opt_dst_android=true;;
       -*) abort "unknown option: $1";;
@@ -240,7 +240,7 @@ app.sync() {
   local opt_dryrun=true
   while (($# > 0)); do
     case "$1" in
-      --help ) app.list.help; exit 1;;
+      --help ) app.sync.help; exit 1;;
       --src-android ) opt_src_android=true;;
       --dst-android ) opt_dst_android=true;;
       --include ) opt_include="$2"; shift;;
@@ -304,18 +304,22 @@ app.sync() {
 subcmd.define sync app.sync
 
 app.archive() {
-  
+  echo "TODO"
 }
 subcmd.define archive app.archive
 
 #-------------------------------------------------------------------------------
 
 main() {
-  if [[ "${1:-}" = -* ]]; then
-    subcmd.run help
-    exit 1
-  fi
-  subcmd.run "$@"
+  case "${1:-help}" in
+    -h | --help )
+      subcmd.run help
+      exit 1
+      ;;
+    * )
+      subcmd.run "$@"
+      ;;
+  esac
 }
 
 main "$@"
