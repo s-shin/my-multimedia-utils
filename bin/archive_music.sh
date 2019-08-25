@@ -54,12 +54,14 @@ opt_music_dir="$MUSIC_DIR"
 opt_output_dir=.
 opt_re=""
 opt_if_or_unless=if
+opt_execute=false
 while (($# > 0)); do
   case "$1" in
     -h | --help ) usage; exit 1;;
     -m ) opt_music_dir="$2"; shift;;
     -o ) opt_output_dir="$2"; shift;;
     -v ) opt_if_or_unless=unless;;
+    -x ) opt_execute=true;;
     * )
       case $((++opt_nargs)) in
         1 ) opt_re="$1";;
@@ -93,7 +95,13 @@ for dir in $targets; do
     logln.i '=> skipped (already exists)'
     continue
   fi
-  (cd "${abs_music_dir}/${artist}"; tar cvf "$out_album_archive" "${album}")
+  if $opt_execute; then
+    (cd "${abs_music_dir}/${artist}"; tar cvf "$out_album_archive" "${album}")
+  else
+    cat <<EOT
+cd "${abs_music_dir}/${artist}"; tar cvf "$out_album_archive" "${album}"
+EOT
+  fi
 done
 IFS="$IFS_BK"
 
