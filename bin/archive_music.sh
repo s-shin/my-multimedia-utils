@@ -11,6 +11,7 @@ Options:
   -m <music-dir>   Source music directory.
   -o <output-dir>  Output directory. Default is cwd.
   -v               <filter-regex> as exclusive filter.
+  -x               Execute.
 
 Environments:
   MUSIC_DIR="${MUSIC_DIR}"
