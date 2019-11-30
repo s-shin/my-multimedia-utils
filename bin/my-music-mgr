@@ -70,8 +70,8 @@ helper.diff_music() {
   local dst_music_path="$1"; shift
   local is_dst_android="$1"; shift
   diff \
-    <(helper.list_albums "$src_music_path" $is_src_android | sort) \
-    <(helper.list_albums "$dst_music_path" $is_dst_android | sort) \
+    <(helper.list_albums "$src_music_path" $is_src_android | sort | uconv -x any-nfd) \
+    <(helper.list_albums "$dst_music_path" $is_dst_android | sort | uconv -x any-nfd) \
     | perl -ne 'if (/^</) { s/^< +(.+)$/$1/; print }'
 }
 
